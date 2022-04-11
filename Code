@@ -1,0 +1,350 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Mar 11 14:28:06 2022
+
+@author: Sean W. Hyland
+https://towardsdatascience.com/time-series-modeling-using-scikit-pandas-and-numpy-682e3b8db8d1
+"""
+import sklearn.metrics as metrics
+import pandas as pd
+import numpy as np
+import os
+
+os.chdir("Your directory for file")
+# Data from Food Services on attendance
+data = pd.read_csv('Food_Services_Lunch.csv',sep=",")
+
+# To explicitly convert the data column to type DATATIME
+data['Date'] = pd.to_datetime(data['Date'])
+data = data.set_index('Date')
+data = data.dropna()
+
+def regression_results(y_true, y_pred):
+    # Regression metrics
+    explained_variance=metrics.explained_variance_score(y_true, y_pred)
+    mean_absolute_error=metrics.mean_absolute_error(y_true, y_pred) 
+    mse=metrics.mean_squared_error(y_true, y_pred) 
+    mean_squared_log_error=metrics.mean_squared_log_error(y_true, y_pred)
+    r2=metrics.r2_score(y_true, y_pred)
+    print('explained_variance: ', round(explained_variance,4))    
+    print('mean_squared_log_error: ', round(mean_squared_log_error,4))
+    print('r2: ', round(r2,4))
+    print('MAE: ', round(mean_absolute_error,4))
+    print('MSE: ', round(mse,4))
+    print('RMSE: ', round(np.sqrt(mse),4))
+    
+# Creating new dataframe from consumption column
+data_consumption = data[['Consumption']]
+
+# Inserting new column with yesterday's consumption values
+data_consumption.loc[:,'Yesterday'] = data_consumption.loc[:,'Consumption'].shift()
+
+# Inserting another column with difference between yesterday and day before yesterday's consumption values
+data_consumption.loc[:,'Yesterday_Diff'] = data_consumption.loc[:,'Yesterday'].diff()
+# Dropping NAs
+data_consumption = data_consumption.dropna()
+data_consumption = data_consumption.iloc[1: , :]
+
+X_train = data_consumption[:'2022-03-25 00:00:00'].drop(['Consumption'], axis = 1)
+y_train = data_consumption.loc[:'2022-03-25 00:00:00', 'Consumption']
+
+X_test = data_consumption['2022-03-25 00:00:00':].drop(['Consumption'], axis = 1)
+y_test = data_consumption.loc['2022-03-25 00:00:00':, 'Consumption']
+
+from sklearn.model_selection import TimeSeriesSplit
+# Spot Check Algorithms
+from sklearn.linear_model import LinearRegression
+from sklearn.neural_network import MLPRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVR
+from sklearn.model_selection import cross_val_score
+
+
+models = []
+models.append(('LR', LinearRegression()))
+models.append(('NN', MLPRegressor(solver = 'lbfgs')))  #neural network
+models.append(('KNN', KNeighborsRegressor())) 
+models.append(('RF', RandomForestRegressor(n_estimators = 12))) # Ensemble method - collection of many decision trees
+models.append(('SVR', SVR(gamma='auto'))) # kernel = linear
+# Evaluate each model in turn
+results = []
+names = []
+for name, model in models:
+    # TimeSeries Cross validation
+    tscv = TimeSeriesSplit(n_splits=12)
+    cv_results = cross_val_score(model, X_train, y_train, cv=tscv, scoring='r2')
+    results.append(cv_results)
+    names.append(name)
+    print('%s: %f (%f)' % (name, cv_results.mean(), cv_results.std()))
+
+import matplotlib.pyplot as plt
+# Compare Algorithms
+plt.ylim(-2,1)
+plt.boxplot(results, labels=names)
+plt.title('Algorithm Comparison')
+plt.show()
+
+from sklearn.model_selection import GridSearchCV
+model = RandomForestRegressor()
+param_search = { 
+    'n_estimators': [20, 50, 100],
+    'max_features': ['auto', 'sqrt', 'log2'],
+    'max_depth' : [i for i in range(5,15)]
+}
+
+from sklearn.metrics import make_scorer
+def rmse(actual, predict):
+    predict = np.array(predict)
+    actual = np.array(actual)
+    distance = predict - actual
+    square_distance = distance ** 2
+    mean_square_distance = square_distance.mean()
+    score = np.sqrt(mean_square_distance)
+    return score
+
+rmse_score = make_scorer(rmse, greater_is_better = False)
+
+tscv = TimeSeriesSplit(n_splits=12)
+gsearch = GridSearchCV(estimator=model, cv=tscv, param_grid=param_search, scoring = rmse_score)
+gsearch.fit(X_train, y_train)
+best_score = gsearch.best_score_
+best_model = gsearch.best_estimator_
+
+y_true = y_test.values
+y_pred = best_model.predict(X_test)
+regression_results(y_true, y_pred)
+
+
+# creating copy of original dataframe
+data_consumption_2o = data_consumption.copy()
+# inserting column with yesterday-1 values
+data_consumption_2o['Yesterday-1'] = data_consumption_2o['Yesterday'].shift()
+# inserting column with difference in yesterday-1 and yesterday-2 values.
+data_consumption_2o['Yesterday-1_Diff'] = data_consumption_2o['Yesterday-1'].diff()
+# dropping NAs
+data_consumption_2o = data_consumption_2o.dropna()
+
+X_train_2o = data_consumption_2o[:'2022-03-25 00:00:00'].drop(['Consumption'], axis = 1)
+y_train_2o = data_consumption_2o.loc[:'2022-03-25 00:00:00', 'Consumption']
+X_test = data_consumption_2o['2022-03-25 00:00:00':].drop(['Consumption'], axis = 1)
+y_test = data_consumption_2o.loc['2022-03-25 00:00:00':, 'Consumption']
+
+model = RandomForestRegressor()
+param_search = { 
+    'n_estimators': [20, 50, 100],
+    'max_features': ['auto', 'sqrt', 'log2'],
+    'max_depth' : [i for i in range(5,15)]
+}
+tscv = TimeSeriesSplit(n_splits=12)
+gsearch = GridSearchCV(estimator=model, cv=tscv, param_grid=param_search, scoring = rmse_score)
+gsearch.fit(X_train_2o, y_train_2o)
+best_score = gsearch.best_score_
+best_model = gsearch.best_estimator_
+y_true = y_test.values
+y_pred = best_model.predict(X_test)
+regression_results(y_true, y_pred)
+
+imp = best_model.feature_importances_
+features = X_train_2o.columns
+indices = np.argsort(imp)
+plt.title('Feature Importances')
+plt.barh(range(len(indices)), imp[indices], color='b', align='center')
+plt.yticks(range(len(indices)), [features[i] for i in indices])
+plt.xlabel('Relative Importance')
+plt.show()
+
+data_consumption_2o_weeklyShift = data_consumption_2o.copy()
+data_consumption_2o_weeklyShift['Last_Week'] = data_consumption_2o['Consumption'].shift(5)
+data_consumption_2o_weeklyShift = data_consumption_2o_weeklyShift.dropna()
+
+X_train_2o_weeklyShift = data_consumption_2o_weeklyShift[:'2022-03-25 00:00:00'].drop(['Consumption'], axis = 1)
+y_train_2o_weeklyShift = data_consumption_2o_weeklyShift.loc[:'2022-03-25 00:00:00', 'Consumption']
+X_test = data_consumption_2o_weeklyShift['2022-03-25 00:00:00':].drop(['Consumption'], axis = 1)
+y_test = data_consumption_2o_weeklyShift.loc['2022-03-25 00:00:00':, 'Consumption']
+model = RandomForestRegressor()
+param_search = { 
+    'n_estimators': [20, 50, 100],
+    'max_features': ['auto', 'sqrt', 'log2'],
+    'max_depth' : [i for i in range(5,15)]
+}
+tscv = TimeSeriesSplit(n_splits=12)
+gsearch = GridSearchCV(estimator=model, cv=tscv, param_grid=param_search, scoring = rmse_score)
+gsearch.fit(X_train_2o_weeklyShift, y_train_2o_weeklyShift)
+best_score = gsearch.best_score_
+best_model = gsearch.best_estimator_
+y_true = y_test.values
+y_pred = best_model.predict(X_test)
+regression_results(y_true, y_pred)
+
+
+
+
+# This attempt is from https://medium.com/analytics-vidhya/python-code-on-holt-winters-forecasting-3843808a9873
+from statsmodels.tsa.seasonal import seasonal_decompose
+# single exponential smoothing
+from statsmodels.tsa.holtwinters import SimpleExpSmoothing   
+# double and triple exponential smoothing
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+#eurest_predict = pd.read_csv('Food_Services_Lunch.csv',sep=",")
+os.chdir("Directory of where you have stored data")
+eurest_predict = pd.read_csv('Food_Services_Lunch.csv',index_col='Date', parse_dates=True)
+eurest_predict = eurest_predict.dropna()
+eurest_predict = eurest_predict.iloc[1: , :]
+# finding shape of the dataframe
+print(eurest_predict.shape)
+# having a look at the data
+print(eurest_predict.head())
+# plotting the original data
+eurest_predict[['Consumption']].plot(title='Consumption')
+
+decompose_result = seasonal_decompose(eurest_predict['Consumption'],model='multiplicative')
+decompose_result.plot();
+
+# Set the frequency of the date time index as Monthly start as indicated by the data
+#eurest_predict.index.freq = 'MS'
+# Set the value of Alpha and define m (Time Period)
+m = 5
+alpha = 1/(2*m)
+
+eurest_predict['HWES1'] = SimpleExpSmoothing(eurest_predict['Consumption']).fit(smoothing_level=alpha,optimized=False,use_brute=True).fittedvalues
+eurest_predict[['Consumption','HWES1']].plot(title='Holt Winters Single Exponential Smoothing');
+
+eurest_predict['HWES2_ADD'] = ExponentialSmoothing(eurest_predict['Consumption'],trend='add').fit().fittedvalues
+eurest_predict['HWES2_MUL'] = ExponentialSmoothing(eurest_predict['Consumption'],trend='mul').fit().fittedvalues
+eurest_predict[['Consumption','HWES2_ADD','HWES2_MUL']].plot(title='Holt Winters Double Exponential Smoothing: Additive and Multiplicative Trend');
+
+eurest_predict['HWES3_ADD'] = ExponentialSmoothing(eurest_predict['Consumption'],trend='add',seasonal='add',seasonal_periods=5).fit().fittedvalues
+eurest_predict['HWES3_MUL'] = ExponentialSmoothing(eurest_predict['Consumption'],trend='mul',seasonal='mul',seasonal_periods=5).fit().fittedvalues
+eurest_predict[['Consumption','HWES3_ADD','HWES3_MUL']].plot(title='Holt Winters Triple Exponential Smoothing: Additive and Multiplicative Seasonality');
+
+forecast_data = pd.read_csv('Food_Services_Lunch.csv',index_col='Date',parse_dates=True)
+forecast_data = forecast_data.iloc[1: , :]
+forecast_data = forecast_data.dropna()
+#forecast_data.index.freq = 'MS'
+# Split into train and test set
+train_eurest_predict = forecast_data[:55]
+test_eurest_predict = forecast_data[55:65]
+
+
+fitted_model = ExponentialSmoothing(train_eurest_predict['Consumption'],trend='mul',seasonal='mul',seasonal_periods=5).fit()
+test_predictions = fitted_model.forecast(10)
+train_eurest_predict['Consumption'].plot(legend=True,label='TRAIN')
+test_eurest_predict['Consumption'].plot(legend=True,label='TEST',figsize=(6,4))
+test_predictions.plot(legend=True,label='PREDICTION')
+plt.title('Train, Test and Predicted Test using Holt Winters')
+
+test_eurest_predict['Consumption'].plot(legend=True,label='TEST',figsize=(9,6))
+#test_predictions.plot(legend=True,label='PREDICTION',xlim=['2022–03–04','2022–03–07']);
+
+from sklearn.metrics import mean_absolute_error,mean_squared_error,r2_score
+print(f'Mean Absolute Error = {mean_absolute_error(test_eurest_predict,test_predictions)}')
+print(f'Mean Squared Error = {mean_squared_error(test_eurest_predict,test_predictions)}')
+print(f'R2 = {r2_score(test_eurest_predict,test_predictions)}')
+
+# Predict next weeks lunch attendance
+train_eurest_predict = forecast_data
+fitted_model = ExponentialSmoothing(train_eurest_predict['Consumption'],trend='mul',seasonal='mul',seasonal_periods=5).fit()
+test_predictions = fitted_model.forecast(10)
+print(test_predictions)
+# Predict next weeks breakfast attendance.
+forecast_data = pd.read_csv('Food_Services_Lunch.csv',index_col='Date',parse_dates=True)
+forecast_data = forecast_data.iloc[1: , :]
+forecast_data = forecast_data.dropna()
+train_eurest_predict = forecast_data
+fitted_model = ExponentialSmoothing(train_eurest_predict['Consumption'],trend='mul',seasonal='mul',seasonal_periods=5).fit()
+test_predictions = fitted_model.forecast(10)
+print(test_predictions)
+#This is the best model with an RMSE of 29.16339
+
+
+
+
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from statsmodels.tsa.seasonal import seasonal_decompose
+  
+# Read the Eurest dataset
+eurest = pd.read_csv('Food_Services_Lunch.csv',
+                       index_col ='Date',
+                       parse_dates = True)
+  
+# Print the first five rows of the dataset
+eurest.head()
+  
+# ETS Decomposition
+result = seasonal_decompose(eurest['Consumption'], 
+                            model ='multiplicative')
+  
+# ETS plot 
+result.plot()
+
+from pmdarima import auto_arima
+  
+# Ignore harmless warnings
+import warnings
+warnings.filterwarnings("ignore")
+  
+# Fit auto_arima function to AirPassengers dataset
+stepwise_fit = auto_arima(eurest['Consumption'], start_p = 1, start_q = 1,
+                          max_p = 3, max_q = 3, m = 5,
+                          start_P = 0, seasonal = True,
+                          d = None, D = 1, trace = True,
+                          error_action ='ignore',   # we don't want to know if an order does not work
+                          suppress_warnings = True,  # we don't want convergence warnings
+                          stepwise = True)           # set to stepwise
+  
+# To print the summary
+stepwise_fit.summary()
+
+# Split data into train / test sets
+train = eurest.iloc[:len(eurest)-5]
+test = eurest.iloc[len(eurest)-5:] # set one year(12 months) for testing
+  
+# Fit a SARIMAX(0, 1, 1)x(2, 1, 1, 12) on the training set
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+  
+model = SARIMAX(train['Consumption'], 
+                order = (1, 0, 0), 
+                seasonal_order =(2, 1, 0, 5))
+  
+result = model.fit()
+result.summary()
+start = len(train)
+end = len(train) + len(test) - 1
+  
+# Predictions for one-year against the test set
+predictions = result.predict(start, end,
+                             typ = 'levels').rename("Predictions")
+  
+# plot predictions and actual values
+predictions.plot(legend = True)
+test['Consumption'].plot(legend = True)
+
+
+# Load specific evaluation tools
+from sklearn.metrics import mean_squared_error
+from statsmodels.tools.eval_measures import rmse
+  
+# Calculate root mean squared error
+rmse(test["Consumption"], predictions)
+  
+# Calculate mean squared error
+mean_squared_error(test["Consumption"], predictions)
+
+# Train the model on the full dataset
+model = model = SARIMAX(eurest['Consumption'], 
+                        order = (1, 0, 0), 
+                        seasonal_order =(2, 1, 0, 5))
+result = model.fit()
+  
+# Forecast for the next 3 years
+forecast = result.predict(start = len(eurest), 
+                          end = (len(eurest)-1) + 3 * 5, 
+                          typ = 'levels').rename('Forecast')
+  
+# Plot the forecast values
+eurest['Consumption'].plot(figsize = (12, 5), legend = True)
+forecast.plot(legend = True)
